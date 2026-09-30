@@ -9,7 +9,7 @@ use std::{
     mem::ManuallyDrop,
 };
 
-use azalea_buf::{AzBuf, BufReadError};
+use azalea_buf::{AzBuf, AzBufVar, BufReadError};
 use azalea_chat::FormattedText;
 use azalea_core::{
     attribute_modifier_operation::AttributeModifierOperation,
@@ -903,10 +903,82 @@ pub struct PotDecorations {
     pub items: Vec<ItemKind>,
 }
 
-#[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct Container {
     pub items: Vec<ItemStack>,
+}
+
+/// Items nested in the container component are sent as optional item
+/// templates: a present flag, then item, count and component patch (not
+/// count-first like a slot's `ItemStack`). An absent entry is an empty slot.
+impl AzBuf for Container {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        let len = u32::azalea_read_var(buf)?;
+        if len > 256 {
+            return Err(BufReadError::VecLengthTooLong {
+                length: len,
+                max_length: 256,
+            });
+        }
+        let mut items = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            if !bool::azalea_read(buf)? {
+                items.push(ItemStack::Empty);
+                continue;
+            }
+            let kind = ItemKind::azalea_read(buf)?;
+            let count = i32::azalea_read_var(buf)?;
+            let component_patch = crate::DataComponentPatch::azalea_read(buf)?;
+            items.push(ItemStack::from(crate::ItemStackData {
+                kind,
+                count,
+                component_patch,
+            }));
+        }
+        Ok(Self { items })
+    }
+    fn azalea_write(&self, buf: &mut impl io::Write) -> io::Result<()> {
+        (self.items.len() as u32).azalea_write_var(buf)?;
+        for item in &self.items {
+            match item {
+                ItemStack::Empty => false.azalea_write(buf)?,
+                ItemStack::Present(i) => {
+                    true.azalea_write(buf)?;
+                    i.kind.azalea_write(buf)?;
+                    i.count.azalea_write_var(buf)?;
+                    i.component_patch.azalea_write(buf)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod container_tests {
+    use std::io::Cursor;
+
+    use azalea_buf::AzBuf;
+
+    use super::*;
+
+    /// Bytes captured from Paper 1.21.4 via ViaVersion for a shulker holding
+    /// 32 iron ingots (slot 0), nothing (slot 1) and 16 gold ingots (slot 2).
+    #[test]
+    fn reads_optional_item_templates() {
+        let bytes = [3u8, 1, 164, 7, 32, 0, 0, 0, 1, 168, 7, 16, 0, 0];
+        let mut cur = Cursor::new(&bytes[..]);
+        let c = Container::azalea_read(&mut cur).unwrap();
+        assert_eq!(cur.position() as usize, bytes.len());
+        assert_eq!(c.items.len(), 3);
+        assert_eq!(c.items[0].count(), 32);
+        assert!(c.items[1].is_empty());
+        assert_eq!(c.items[2].count(), 16);
+        let mut out = Vec::new();
+        c.azalea_write(&mut out).unwrap();
+        assert_eq!(out, bytes);
+    }
 }
 
 #[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
