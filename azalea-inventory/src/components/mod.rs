@@ -661,16 +661,32 @@ pub enum MapPostProcessing {
     Scale,
 }
 
-#[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ChargedProjectiles {
     pub items: Vec<ItemStack>,
 }
+impl AzBuf for ChargedProjectiles {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        Ok(Self { items: read_template_list(buf)? })
+    }
+    fn azalea_write(&self, buf: &mut impl io::Write) -> io::Result<()> {
+        write_template_list(&self.items, buf)
+    }
+}
 
-#[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct BundleContents {
     pub items: Vec<ItemStack>,
+}
+impl AzBuf for BundleContents {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        Ok(Self { items: read_template_list(buf)? })
+    }
+    fn azalea_write(&self, buf: &mut impl io::Write) -> io::Result<()> {
+        write_template_list(&self.items, buf)
+    }
 }
 
 #[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
@@ -909,46 +925,60 @@ pub struct Container {
     pub items: Vec<ItemStack>,
 }
 
-/// Items nested in the container component are sent as optional item
-/// templates: a present flag, then item, count and component patch (not
-/// count-first like a slot's `ItemStack`). An absent entry is an empty slot.
+/// Items nested inside components (bundle contents, charged projectiles,
+/// use remainder) are sent as item templates: item, count, then component
+/// patch. A slot's own `ItemStack` is count-first instead.
+fn read_template(buf: &mut Cursor<&[u8]>) -> Result<ItemStack, BufReadError> {
+    let kind = ItemKind::azalea_read(buf)?;
+    let count = i32::azalea_read_var(buf)?;
+    let component_patch = crate::DataComponentPatch::azalea_read(buf)?;
+    Ok(ItemStack::from(crate::ItemStackData { kind, count, component_patch }))
+}
+
+fn write_template(item: &ItemStack, buf: &mut impl io::Write) -> io::Result<()> {
+    match item {
+        ItemStack::Present(i) => {
+            i.kind.azalea_write(buf)?;
+            i.count.azalea_write_var(buf)?;
+            i.component_patch.azalea_write(buf)
+        }
+        ItemStack::Empty => Err(io::Error::new(io::ErrorKind::InvalidInput, "an item template can't be empty")),
+    }
+}
+
+fn read_template_list(buf: &mut Cursor<&[u8]>) -> Result<Vec<ItemStack>, BufReadError> {
+    let len = u32::azalea_read_var(buf)?;
+    if len > 256 {
+        return Err(BufReadError::VecLengthTooLong { length: len, max_length: 256 });
+    }
+    (0..len).map(|_| read_template(buf)).collect()
+}
+
+fn write_template_list(items: &[ItemStack], buf: &mut impl io::Write) -> io::Result<()> {
+    (items.len() as u32).azalea_write_var(buf)?;
+    items.iter().try_for_each(|i| write_template(i, buf))
+}
+
+/// The container component's entries are *optional* templates: a present
+/// flag, then a template. An absent entry is an empty slot.
 impl AzBuf for Container {
     fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
         let len = u32::azalea_read_var(buf)?;
         if len > 256 {
-            return Err(BufReadError::VecLengthTooLong {
-                length: len,
-                max_length: 256,
-            });
+            return Err(BufReadError::VecLengthTooLong { length: len, max_length: 256 });
         }
         let mut items = Vec::with_capacity(len as usize);
         for _ in 0..len {
-            if !bool::azalea_read(buf)? {
-                items.push(ItemStack::Empty);
-                continue;
-            }
-            let kind = ItemKind::azalea_read(buf)?;
-            let count = i32::azalea_read_var(buf)?;
-            let component_patch = crate::DataComponentPatch::azalea_read(buf)?;
-            items.push(ItemStack::from(crate::ItemStackData {
-                kind,
-                count,
-                component_patch,
-            }));
+            items.push(if bool::azalea_read(buf)? { read_template(buf)? } else { ItemStack::Empty });
         }
         Ok(Self { items })
     }
     fn azalea_write(&self, buf: &mut impl io::Write) -> io::Result<()> {
         (self.items.len() as u32).azalea_write_var(buf)?;
         for item in &self.items {
-            match item {
-                ItemStack::Empty => false.azalea_write(buf)?,
-                ItemStack::Present(i) => {
-                    true.azalea_write(buf)?;
-                    i.kind.azalea_write(buf)?;
-                    i.count.azalea_write_var(buf)?;
-                    i.component_patch.azalea_write(buf)?;
-                }
+            item.is_present().azalea_write(buf)?;
+            if item.is_present() {
+                write_template(item, buf)?;
             }
         }
         Ok(())
@@ -978,6 +1008,38 @@ mod container_tests {
         let mut out = Vec::new();
         c.azalea_write(&mut out).unwrap();
         assert_eq!(out, bytes);
+    }
+
+    fn round_trip<T: AzBuf>(bytes: &[u8]) -> T {
+        let mut cur = Cursor::new(bytes);
+        let v = T::azalea_read(&mut cur).unwrap();
+        assert_eq!(cur.position() as usize, bytes.len(), "not all bytes consumed");
+        let mut out = Vec::new();
+        v.azalea_write(&mut out).unwrap();
+        assert_eq!(out, bytes);
+        v
+    }
+
+    /// Captured via ViaVersion: a bundle of 32 iron ingots and 16 gold ingots.
+    #[test]
+    fn reads_bundle_contents_templates() {
+        let b: BundleContents = round_trip(&[2, 164, 7, 32, 0, 0, 168, 7, 16, 0, 0]);
+        assert_eq!((b.items[0].kind(), b.items[0].count()), (ItemKind::IronIngot, 32));
+        assert_eq!((b.items[1].kind(), b.items[1].count()), (ItemKind::GoldIngot, 16));
+    }
+
+    /// Captured via ViaVersion: a crossbow loaded with one arrow.
+    #[test]
+    fn reads_charged_projectiles_templates() {
+        let c: ChargedProjectiles = round_trip(&[1, 155, 7, 1, 0, 0]);
+        assert_eq!((c.items[0].kind(), c.items[0].count()), (ItemKind::Arrow, 1));
+    }
+
+    /// Captured via ViaVersion: an apple that leaves a bowl.
+    #[test]
+    fn reads_use_remainder_template() {
+        let u: UseRemainder = round_trip(&[152, 7, 1, 0, 0]);
+        assert_eq!((u.convert_into.kind(), u.convert_into.count()), (ItemKind::Bowl, 1));
     }
 }
 
@@ -1081,10 +1143,18 @@ pub enum ItemUseAnimation {
     Brush,
 }
 
-#[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct UseRemainder {
     pub convert_into: ItemStack,
+}
+impl AzBuf for UseRemainder {
+    fn azalea_read(buf: &mut Cursor<&[u8]>) -> Result<Self, BufReadError> {
+        Ok(Self { convert_into: read_template(buf)? })
+    }
+    fn azalea_write(&self, buf: &mut impl io::Write) -> io::Result<()> {
+        write_template(&self.convert_into, buf)
+    }
 }
 
 #[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
