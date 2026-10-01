@@ -109,6 +109,24 @@ fn test_simple_forward() {
     assert_simulation_reaches(&mut simulation, 20, BlockPos::new(0, 71, 1));
 }
 
+/// Far from spawn, chunk section coordinates no longer fit in an `i16`; the
+/// block cache used to wrap them and read the wrong chunk, so no path was
+/// found.
+#[test]
+fn test_walk_far_from_origin() {
+    let (x, z) = (1_000_000, 1_000_000);
+    let mut partial_chunks = PartialChunkStorage::default();
+    partial_chunks.update_view_center(ChunkPos::from(&BlockPos::new(x, 70, z)));
+    let floor: Vec<BlockPos> = (0..10).map(|i| BlockPos::new(x, 70, z + i)).collect();
+    let mut simulation = setup_blockposgoal_simulation(
+        &mut partial_chunks,
+        BlockPos::new(x, 71, z),
+        BlockPos::new(x, 71, z + 9),
+        &floor,
+    );
+    assert_simulation_reaches(&mut simulation, 80, BlockPos::new(x, 71, z + 9));
+}
+
 #[test]
 fn test_double_diagonal_with_walls() {
     let mut partial_chunks = PartialChunkStorage::default();
