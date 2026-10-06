@@ -1065,9 +1065,15 @@ pub struct Bees {
     pub occupants: Vec<BeehiveOccupant>,
 }
 
+/// Which key item opens a locked container: an item predicate (for example
+/// "an item with this custom name"). The component has no network codec of
+/// its own, so the server sends it as NBT. It used to be a plain string key;
+/// reading it as one misaligned every item after a locked container (a
+/// shulker box locked with `lock={components:{custom_name:...}}`).
 #[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct Lock {
-    pub key: String,
+    pub predicate: NbtCompound,
 }
 
 #[derive(AzBuf, Clone, Debug, PartialEq, Serialize)]

@@ -203,3 +203,55 @@ fn test_glider_checksum() {
     let c = Glider;
     assert_eq!(get_checksum(&c, &Default::default()).unwrap().0, 3312760008);
 }
+
+/// A locked shulker box as 0b0t sent it (protocol 776): the lock is an item
+/// predicate in NBT, followed by more components and then the next slot.
+/// Reading the lock as a string used to misalign everything after it.
+#[test]
+fn test_lock_is_an_nbt_predicate() {
+    use std::io::Cursor;
+
+    use azalea_buf::{AzBuf, AzBufVar};
+    use azalea_inventory::components::{DyeColor, Lock, ShulkerColor};
+    use azalea_registry::builtin::DataComponentKind;
+
+    let name = br#"{"text":"key"}"#;
+    // Nameless root compound { components: { custom_name: "<json>" } }.
+    let mut lock_nbt = vec![10, 10, 0, 10];
+    lock_nbt.extend_from_slice(b"components");
+    lock_nbt.extend_from_slice(&[8, 0, 11]);
+    lock_nbt.extend_from_slice(b"custom_name");
+    lock_nbt.extend_from_slice(&(name.len() as u16).to_be_bytes());
+    lock_nbt.extend_from_slice(name);
+    lock_nbt.extend_from_slice(&[0, 0]);
+
+    let mut buf = Vec::new();
+    1i32.azalea_write_var(&mut buf).unwrap();
+    ItemKind::LimeShulkerBox.azalea_write(&mut buf).unwrap();
+    2u32.azalea_write_var(&mut buf).unwrap(); // components with data
+    0u32.azalea_write_var(&mut buf).unwrap(); // components removed
+    DataComponentKind::Lock.azalea_write(&mut buf).unwrap();
+    buf.extend_from_slice(&lock_nbt);
+    DataComponentKind::ShulkerColor.azalea_write(&mut buf).unwrap();
+    DyeColor::Lime.azalea_write(&mut buf).unwrap();
+    // The next slot: 7 stone, no components.
+    7i32.azalea_write_var(&mut buf).unwrap();
+    ItemKind::Stone.azalea_write(&mut buf).unwrap();
+    0u32.azalea_write_var(&mut buf).unwrap();
+    0u32.azalea_write_var(&mut buf).unwrap();
+
+    let mut c = Cursor::new(&buf[..]);
+    let shulker = ItemStack::azalea_read(&mut c).unwrap();
+    let lock = shulker.get_component::<Lock>().expect("lock decoded");
+    let components = lock.predicate.compound("components").expect("predicate has components");
+    assert_eq!(components.string("custom_name").map(|s| s.to_string()).as_deref(), Some(r#"{"text":"key"}"#));
+    assert!(shulker.get_component::<ShulkerColor>().is_some(), "the component after the lock still lines up");
+    let next = ItemStack::azalea_read(&mut c).unwrap();
+    assert_eq!((next.kind(), next.count()), (ItemKind::Stone, 7), "the next slot still lines up");
+    assert_eq!(c.position() as usize, buf.len());
+
+    // And it writes back the same bytes.
+    let mut again = Vec::new();
+    shulker.azalea_write(&mut again).unwrap();
+    assert_eq!(again, buf[..again.len()]);
+}
