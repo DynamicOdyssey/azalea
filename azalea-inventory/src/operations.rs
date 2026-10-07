@@ -8,7 +8,9 @@ use crate::{
     EnchantmentMenuLocation, FurnaceMenuLocation, Generic3x3MenuLocation, Generic9x1MenuLocation,
     Generic9x2MenuLocation, Generic9x3MenuLocation, Generic9x4MenuLocation, Generic9x5MenuLocation,
     Generic9x6MenuLocation, GrindstoneMenuLocation, HopperMenuLocation, ItemStack, ItemStackData,
-    LecternMenuLocation, LoomMenuLocation, Menu, MenuLocation, MerchantMenuLocation, Player,
+    LecternMenuLocation, LoomMenuLocation, Menu, MenuLocation, MerchantMenuLocation,
+    MountChest3MenuLocation, MountChest6MenuLocation, MountChest9MenuLocation,
+    MountChest12MenuLocation, MountChest15MenuLocation, MountMenuLocation, Player,
     PlayerMenuLocation, ShulkerBoxMenuLocation, SmithingMenuLocation, SmokerMenuLocation,
     StonecutterMenuLocation, item::MaxStackSizeExt,
 };
@@ -302,7 +304,8 @@ impl Menu {
                     // also offhand handling
 
                     if l == PlayerMenuLocation::Inventory {
-                        // shift-clicking in hotbar moves to inventory, and vice versa
+                        // shift-clicking in hotbar moves to inventory, and vice
+                        // versa
                         if Player::is_hotbar_slot(slot_index) {
                             self.try_move_item_to_slots(
                                 slot_index,
@@ -493,6 +496,66 @@ impl Menu {
                     self.try_move_item_to_slots(slot_index, self.player_slots_range());
                 }
             },
+            MenuLocation::Mount(l) => {
+                if l != MountMenuLocation::Player {
+                    self.try_move_item_to_slots(slot_index, self.player_slots_range());
+                }
+            }
+            MenuLocation::MountChest3(l) => match l {
+                MountChest3MenuLocation::Player => {
+                    self.try_move_item_to_slots_or_toggle_hotbar(
+                        slot_index,
+                        Menu::MOUNT_CHEST3_CONTENTS_SLOTS,
+                    );
+                }
+                _ => {
+                    self.try_move_item_to_slots(slot_index, self.player_slots_range());
+                }
+            },
+            MenuLocation::MountChest6(l) => match l {
+                MountChest6MenuLocation::Player => {
+                    self.try_move_item_to_slots_or_toggle_hotbar(
+                        slot_index,
+                        Menu::MOUNT_CHEST6_CONTENTS_SLOTS,
+                    );
+                }
+                _ => {
+                    self.try_move_item_to_slots(slot_index, self.player_slots_range());
+                }
+            },
+            MenuLocation::MountChest9(l) => match l {
+                MountChest9MenuLocation::Player => {
+                    self.try_move_item_to_slots_or_toggle_hotbar(
+                        slot_index,
+                        Menu::MOUNT_CHEST9_CONTENTS_SLOTS,
+                    );
+                }
+                _ => {
+                    self.try_move_item_to_slots(slot_index, self.player_slots_range());
+                }
+            },
+            MenuLocation::MountChest12(l) => match l {
+                MountChest12MenuLocation::Player => {
+                    self.try_move_item_to_slots_or_toggle_hotbar(
+                        slot_index,
+                        Menu::MOUNT_CHEST12_CONTENTS_SLOTS,
+                    );
+                }
+                _ => {
+                    self.try_move_item_to_slots(slot_index, self.player_slots_range());
+                }
+            },
+            MenuLocation::MountChest15(l) => match l {
+                MountChest15MenuLocation::Player => {
+                    self.try_move_item_to_slots_or_toggle_hotbar(
+                        slot_index,
+                        Menu::MOUNT_CHEST15_CONTENTS_SLOTS,
+                    );
+                }
+                _ => {
+                    self.try_move_item_to_slots(slot_index, self.player_slots_range());
+                }
+            },
             MenuLocation::Hopper(l) => match l {
                 HopperMenuLocation::Player => {
                     self.try_move_item_to_slots_or_toggle_hotbar(
@@ -634,8 +697,8 @@ impl Menu {
             return false;
         }
         let item = self.slot(target_slot_index).unwrap();
-        // the default here probably doesn't matter since we should only be calling this
-        // if we already checked that the slot isn't empty
+        // the default here probably doesn't matter since we should only be
+        // calling this if we already checked that the slot isn't empty
         item.as_present()
             .is_some_and(|item| self.may_place(target_slot_index, item))
     }
@@ -700,7 +763,8 @@ impl Menu {
                 let slot_item_limit = self.max_stack_size(target_slot_index);
                 let new_target_slot_data = item.split(i32::min(slot_item_limit, item.count) as u32);
 
-                // get the target slot again but mut this time so we can update it
+                // get the target slot again but mut this time so we can update
+                // it
                 let target_slot = self.slot_mut(target_slot_index).unwrap();
                 *target_slot = ItemStack::from(new_target_slot_data);
 

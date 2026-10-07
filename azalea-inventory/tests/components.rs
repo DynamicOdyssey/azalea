@@ -232,7 +232,9 @@ fn test_lock_is_an_nbt_predicate() {
     0u32.azalea_write_var(&mut buf).unwrap(); // components removed
     DataComponentKind::Lock.azalea_write(&mut buf).unwrap();
     buf.extend_from_slice(&lock_nbt);
-    DataComponentKind::ShulkerColor.azalea_write(&mut buf).unwrap();
+    DataComponentKind::ShulkerColor
+        .azalea_write(&mut buf)
+        .unwrap();
     DyeColor::Lime.azalea_write(&mut buf).unwrap();
     // The next slot: 7 stone, no components.
     7i32.azalea_write_var(&mut buf).unwrap();
@@ -243,11 +245,27 @@ fn test_lock_is_an_nbt_predicate() {
     let mut c = Cursor::new(&buf[..]);
     let shulker = ItemStack::azalea_read(&mut c).unwrap();
     let lock = shulker.get_component::<Lock>().expect("lock decoded");
-    let components = lock.predicate.compound("components").expect("predicate has components");
-    assert_eq!(components.string("custom_name").map(|s| s.to_string()).as_deref(), Some(r#"{"text":"key"}"#));
-    assert!(shulker.get_component::<ShulkerColor>().is_some(), "the component after the lock still lines up");
+    let components = lock
+        .predicate
+        .compound("components")
+        .expect("predicate has components");
+    assert_eq!(
+        components
+            .string("custom_name")
+            .map(|s| s.to_string())
+            .as_deref(),
+        Some(r#"{"text":"key"}"#)
+    );
+    assert!(
+        shulker.get_component::<ShulkerColor>().is_some(),
+        "the component after the lock still lines up"
+    );
     let next = ItemStack::azalea_read(&mut c).unwrap();
-    assert_eq!((next.kind(), next.count()), (ItemKind::Stone, 7), "the next slot still lines up");
+    assert_eq!(
+        (next.kind(), next.count()),
+        (ItemKind::Stone, 7),
+        "the next slot still lines up"
+    );
     assert_eq!(c.position() as usize, buf.len());
 
     // And it writes back the same bytes.

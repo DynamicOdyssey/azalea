@@ -201,4 +201,110 @@ declare_menus! {
         input: 1,
         result: 1,
     },
+    // A horse, donkey, mule or llama's inventory. The server opens it with
+    // ClientboundMountScreenOpen, not a MenuKind; see `Menu::mount`.
+    Mount {
+        saddle: 1,
+        armor: 1,
+    },
+    MountChest3 {
+        saddle: 1,
+        armor: 1,
+        contents: 3,
+    },
+    MountChest6 {
+        saddle: 1,
+        armor: 1,
+        contents: 6,
+    },
+    MountChest9 {
+        saddle: 1,
+        armor: 1,
+        contents: 9,
+    },
+    MountChest12 {
+        saddle: 1,
+        armor: 1,
+        contents: 12,
+    },
+    MountChest15 {
+        saddle: 1,
+        armor: 1,
+        contents: 15,
+    },
+}
+
+impl Menu {
+    /// The menu for a mount's inventory (`ClientboundMountScreenOpen`):
+    /// saddle, body armor, then `columns * 3` chest slots (a donkey or mule
+    /// with a chest has 5 columns), then the player's 36 slots.
+    pub fn mount(columns: u32) -> Self {
+        match columns {
+            0 => Menu::Mount {
+                saddle: Default::default(),
+                armor: Default::default(),
+                player: Default::default(),
+            },
+            1 => Menu::MountChest3 {
+                saddle: Default::default(),
+                armor: Default::default(),
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            2 => Menu::MountChest6 {
+                saddle: Default::default(),
+                armor: Default::default(),
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            3 => Menu::MountChest9 {
+                saddle: Default::default(),
+                armor: Default::default(),
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            4 => Menu::MountChest12 {
+                saddle: Default::default(),
+                armor: Default::default(),
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            _ => Menu::MountChest15 {
+                saddle: Default::default(),
+                armor: Default::default(),
+                contents: Default::default(),
+                player: Default::default(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod mount_tests {
+    use super::*;
+
+    #[test]
+    fn donkey_with_a_chest_lays_out_like_the_game() {
+        // HorseInventoryMenu: saddle 0, body armor 1, chest 2.., then the
+        // player.
+        let m = Menu::mount(5);
+        assert_eq!(m.len(), 2 + 15 + 36);
+        assert_eq!(m.contents().len(), 17);
+        assert_eq!(m.player_slots_range(), 17..=52);
+        assert_eq!(m.hotbar_slots_range(), 44..=52);
+        assert_eq!(Menu::MOUNT_CHEST15_CONTENTS_SLOTS, 2..=16);
+        assert!(matches!(
+            m.location_for_slot(0),
+            Some(MenuLocation::MountChest15(MountChest15MenuLocation::Saddle))
+        ));
+        assert!(matches!(
+            m.location_for_slot(2),
+            Some(MenuLocation::MountChest15(
+                MountChest15MenuLocation::Contents
+            ))
+        ));
+        // No chest (a horse): just saddle and armor.
+        assert_eq!(Menu::mount(0).player_slots_range(), 2..=37);
+        assert_eq!(Menu::mount(3).len(), 2 + 9 + 36);
+    }
 }

@@ -279,8 +279,8 @@ pub fn generate_match_variant_for_kind(menu: &Menu) -> TokenStream {
     // contents: Default::default(), player: Default::default() },
 
     let menu_name = &menu.name;
-    let menu_field_names = if menu.name == "Player" {
-        // player isn't in MenuKind
+    let menu_field_names = if menu.name == "Player" || menu.name.to_string().starts_with("Mount") {
+        // player isn't in MenuKind, and mounts open by ClientboundMountScreenOpen
         return quote! {};
     } else {
         let mut menu_field_names = quote! {};
