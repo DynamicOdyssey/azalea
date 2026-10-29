@@ -19,6 +19,7 @@ mod packet_order;
 mod packet_order_set_carried_item;
 mod receive_spawn_entity_and_start_config_packet;
 mod receive_start_config_packet;
+mod reconfiguration_replaces_registries;
 mod rejoin_reuses_own_entity;
 mod reply_to_ping_with_pong;
 mod set_health_before_login;

@@ -75,6 +75,37 @@ macro_rules! registry_holder {
                     .append_nbt(id, entries);
             }
 
+            /// Set a registry to exactly these entries, dropping what it held.
+            ///
+            /// The server sends each registry whole in one packet, and again
+            /// in every configuration phase. A proxy (like Velocity) moving the
+            /// client to another server reconfigures it with that server's
+            /// registries, which may differ in content or order; appending
+            /// them to the old ones would map protocol ids to the wrong keys.
+            pub fn replace(
+                &mut self,
+                id: Identifier,
+                entries: Vec<(Identifier, Option<NbtCompound>)>,
+            ) {
+                if id.namespace() == "minecraft" {
+                    match id.path() {
+                        $(
+                            stringify!($registry) => {
+                                self.$registry = RegistryType::default();
+                                return self.$registry.append_nbt(id, entries);
+                            }
+                        )*
+                        _ => {}
+                    }
+                }
+
+                self.extra.remove(&id);
+                self.extra
+                    .entry(id.clone())
+                    .or_default()
+                    .append_nbt(id, entries);
+            }
+
             pub fn extend(&mut self, other: RegistryHolder) {
                 $(
                     self.$registry = other.$registry;

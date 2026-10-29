@@ -73,10 +73,11 @@ impl ConfigPacketHandler<'_> {
             let world_holder = query.get_mut(self.player).unwrap();
             let mut world = world_holder.shared.write();
 
-            // add the new registry data
+            // each packet holds a whole registry, so it replaces the one we had
+            // (a proxy moving us to another server sends that server's)
             world
                 .registries
-                .append(p.registry_id.clone(), p.entries.clone());
+                .replace(p.registry_id.clone(), p.entries.clone());
         });
     }
 
