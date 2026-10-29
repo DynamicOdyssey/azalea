@@ -95,10 +95,22 @@ pub fn handle_start_join_server_event(
     mut events: MessageReader<StartJoinServerEvent>,
     mut entity_uuid_index: ResMut<EntityUuidIndex>,
     connection_query: Query<&RawConnection>,
+    local_query: Query<(Entity, &Account), With<LocalEntity>>,
 ) {
     for event in events.read() {
         let uuid = event.account.uuid();
-        let entity = if let Some(entity) = entity_uuid_index.get(&uuid) {
+        // Reuse this account's own client entity. The uuid index isn't enough:
+        // it can point at a copy of this player that another client in the
+        // swarm spawned, and joining anywhere but the client's own entity
+        // leaves that entity (and everything the user attached to it) behind.
+        let own = local_query
+            .iter()
+            .find(|(_, account)| account.uuid() == uuid)
+            .map(|(entity, _)| entity);
+        let entity = if let Some(entity) = own {
+            if entity_uuid_index.get(&uuid) != Some(entity) {
+                entity_uuid_index.insert(uuid, entity);
+            }
             debug!("Reusing entity {entity:?} for client");
 
             // check if it's already connected
@@ -115,7 +127,7 @@ pub fn handle_start_join_server_event(
                         "Received StartJoinServerEvent for {entity:?} but it's already connected. Ignoring the event."
                     );
                 }
-                return;
+                continue;
             }
 
             entity

@@ -43,6 +43,22 @@ impl EntityUuidIndex {
     pub fn remove(&mut self, uuid: &Uuid) -> Option<Entity> {
         self.entity_by_uuid.remove(uuid)
     }
+
+    /// Remove `uuid` only if it still points at `entity`.
+    ///
+    /// Two ECS entities can have the same UUID, for example a client and the
+    /// copy of it that another client in the swarm spawned before the first
+    /// one logged in. Despawning the copy must not drop the client's entry,
+    /// or the client's next join creates a new entity instead of reusing its
+    /// own. Returns whether it was removed.
+    pub fn remove_if_entity(&mut self, uuid: &Uuid, entity: Entity) -> bool {
+        if self.entity_by_uuid.get(uuid) == Some(&entity) {
+            self.entity_by_uuid.remove(uuid);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// An index of Minecraft entity IDs to Azalea ECS entities.
@@ -103,9 +119,10 @@ impl EntityIdIndex {
             self.entity_by_id.remove(&id);
             Some(id)
         } else {
-            // this is expected to happen when despawning entities if it was already
-            // despawned for another reason (like because the client received a
-            // remove_entities packet, or if we're in a shared world where entity ids are
+            // this is expected to happen when despawning entities if it was
+            // already despawned for another reason (like because
+            // the client received a remove_entities packet, or if
+            // we're in a shared world where entity ids are
             // different for each client)
             trace!(
                 "Failed to remove {entity:?} from a client's EntityIdIndex (using EntityIdIndex::remove_by_ecs_entity). This may be expected behavior."
@@ -201,11 +218,12 @@ pub fn remove_despawned_entities_from_indexes(
 ) {
     for (entity, uuid, minecraft_id, position, world_name, loaded_by) in &query {
         let Some(world_lock) = worlds.get(world_name) else {
-            // the world isn't even loaded by us, so we can safely delete the entity
+            // the world isn't even loaded by us, so we can safely delete the
+            // entity
             debug!("Despawned entity {entity:?} because it's in a world that isn't loaded anymore");
-            if entity_uuid_index.entity_by_uuid.remove(uuid).is_none() {
-                warn!(
-                    "Tried to remove entity {entity:?} from the uuid index but it was not there."
+            if !entity_uuid_index.remove_if_entity(uuid, entity) {
+                debug!(
+                    "Entity {entity:?} wasn't the one in the uuid index for its uuid, so it was left there."
                 );
             }
             // and now remove the entity from the ecs
@@ -268,10 +286,14 @@ pub fn remove_despawned_entities_from_indexes(
             }
         }
         // remove it from the uuid index
-        if entity_uuid_index.entity_by_uuid.remove(uuid).is_none() {
-            warn!("Tried to remove entity {entity:?} from the uuid index but it was not there.");
+        if !entity_uuid_index.remove_if_entity(uuid, entity) {
+            debug!(
+                "Entity {entity:?} wasn't the one in the uuid index for its uuid, so it was left there."
+            );
         }
-        if world.entity_by_id.remove(minecraft_id).is_none() {
+        if world.entity_by_id.get(minecraft_id) == Some(&entity) {
+            world.entity_by_id.remove(minecraft_id);
+        } else {
             debug!(
                 "Tried to remove entity {entity:?} from the per-world entity id index but it was not there. This may be expected if you're in a shared world."
             );
