@@ -123,7 +123,17 @@ pub struct WeakChunkStorage {
     /// below y=0.
     pub min_y: i32,
     pub map: IntMap<ChunkPos, Weak<RwLock<Chunk>>>,
+    /// The map's size at which [`Self::sweep`] next runs from `upsert`.
+    ///
+    /// Nothing else removes an entry whose chunk was dropped, and a `Weak`
+    /// keeps its chunk's allocation alive, so without sweeping a client that
+    /// travels (an elytra explorer loads ~25 new chunks a second) grows by
+    /// ~120 bytes for every chunk it has ever seen.
+    sweep_at: usize,
 }
+
+/// The fewest entries before `upsert` sweeps.
+const SWEEP_MIN: usize = 4096;
 
 impl WeakChunkStorage {
     pub fn new(height: u32, min_y: i32) -> Self {
@@ -131,7 +141,16 @@ impl WeakChunkStorage {
             height,
             min_y,
             map: IntMap::default(),
+            sweep_at: SWEEP_MIN,
         }
+    }
+
+    /// Forget the chunks nothing holds any more, and give back the memory
+    /// the map no longer needs.
+    pub fn sweep(&mut self) {
+        self.map.retain(|_, chunk| chunk.strong_count() > 0);
+        self.map.shrink_to(self.map.len() * 2);
+        self.sweep_at = (self.map.len() * 2).max(SWEEP_MIN);
     }
 }
 impl ChunkStorageTrait for WeakChunkStorage {
@@ -160,6 +179,10 @@ impl ChunkStorageTrait for WeakChunkStorage {
             Entry::Vacant(e) => {
                 let arc = Arc::new(RwLock::new(chunk));
                 e.insert(Arc::downgrade(&arc));
+                // Amortized: the next sweep waits for the map to double.
+                if self.map.len() >= self.sweep_at {
+                    self.sweep();
+                }
                 arc
             }
         }
@@ -197,12 +220,54 @@ impl Debug for ChunkStorage {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use azalea_core::position::{BlockPos, ChunkPos};
 
     use crate::{
         Chunk,
-        chunk::{partial::PartialChunkStorage, storage::ChunkStorage},
+        chunk::{
+            partial::PartialChunkStorage,
+            storage::{ChunkStorage, ChunkStorageTrait, SWEEP_MIN, WeakChunkStorage},
+        },
     };
+
+    #[test]
+    fn dropped_chunks_are_forgotten() {
+        let mut storage = WeakChunkStorage::default();
+        let mut held = Vec::new();
+        // A client flying in a straight line: every chunk is new, and only
+        // the last few are still held (its view).
+        for x in 0..(SWEEP_MIN as i32 * 10) {
+            let chunk = storage.upsert(ChunkPos { x, z: 0 }, Chunk::default());
+            held.push(chunk);
+            if held.len() > 100 {
+                held.remove(0);
+            }
+        }
+        assert!(
+            storage.map.len() < SWEEP_MIN * 2,
+            "{} entries kept for 100 live chunks",
+            storage.map.len()
+        );
+        for chunk in &held {
+            let pos = storage
+                .map
+                .iter()
+                .find(|(_, w)| w.as_ptr() == Arc::as_ptr(chunk))
+                .map(|(p, _)| *p);
+            assert!(pos.is_some(), "a held chunk was swept");
+        }
+        // A held chunk is still found by position after sweeping.
+        let last = ChunkPos {
+            x: SWEEP_MIN as i32 * 10 - 1,
+            z: 0,
+        };
+        assert!(storage.get(&last).is_some());
+        drop(held);
+        storage.sweep();
+        assert!(storage.map.is_empty());
+    }
 
     #[test]
     fn test_out_of_bounds_y() {
