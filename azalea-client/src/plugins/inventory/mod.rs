@@ -69,7 +69,11 @@ pub struct MenuOpenedEvent {
     pub title: FormattedText,
 }
 fn handle_menu_opened_trigger(event: On<MenuOpenedEvent>, mut query: Query<&mut Inv>) {
-    let mut inventory = query.get_mut(event.entity).unwrap();
+    // The entity loses its inventory as it disconnects: a late
+    // event for it has nothing to act on.
+    let Ok(mut inventory) = query.get_mut(event.entity) else {
+        return;
+    };
     inventory.id = event.window_id;
     inventory.container_menu = Some(Menu::from_kind(event.menu_type));
     inventory.container_menu_title = Some(event.title.clone());
@@ -93,7 +97,11 @@ fn handle_container_close_event(
     mut commands: Commands,
     query: Query<(Entity, &Inv)>,
 ) {
-    let (entity, inventory) = query.get(close_container.entity).unwrap();
+    // The entity loses its inventory as it disconnects: a late
+    // event for it has nothing to act on.
+    let Ok((entity, inventory)) = query.get(close_container.entity) else {
+        return;
+    };
     if close_container.id != inventory.id {
         warn!(
             "Tried to close container with ID {}, but the current container ID is {}",
@@ -129,7 +137,11 @@ pub fn handle_client_side_close_container_trigger(
     event: On<ClientsideCloseContainerEvent>,
     mut query: Query<&mut Inv>,
 ) {
-    let mut inventory = query.get_mut(event.entity).unwrap();
+    // The entity loses its inventory as it disconnects: a late
+    // event for it has nothing to act on.
+    let Ok(mut inventory) = query.get_mut(event.entity) else {
+        return;
+    };
 
     // copy the Player part of the container_menu to the inventory_menu
     if let Some(inventory_menu) = inventory.container_menu.take() {
@@ -172,8 +184,13 @@ pub fn handle_container_click_event(
     mut query: Query<(Entity, &mut Inv, Option<&PlayerAbilities>, &WorldName)>,
     worlds: Res<Worlds>,
 ) {
-    let (entity, mut inventory, player_abilities, world_name) =
-        query.get_mut(container_click.entity).unwrap();
+    // The entity loses its inventory as it disconnects: a late
+    // event for it has nothing to act on.
+    let Ok((entity, mut inventory, player_abilities, world_name)) =
+        query.get_mut(container_click.entity)
+    else {
+        return;
+    };
     if inventory.id != container_click.window_id {
         error!(
             "Tried to click container with ID {}, but the current container ID is {}. Click packet won't be sent.",
@@ -239,7 +256,11 @@ pub fn handle_set_container_content_trigger(
     set_container_content: On<SetContainerContentEvent>,
     mut query: Query<&mut Inv>,
 ) {
-    let mut inventory = query.get_mut(set_container_content.entity).unwrap();
+    // The entity loses its inventory as it disconnects: a late
+    // event for it has nothing to act on.
+    let Ok(mut inventory) = query.get_mut(set_container_content.entity) else {
+        return;
+    };
 
     if set_container_content.container_id != inventory.id {
         warn!(
@@ -270,7 +291,11 @@ pub fn handle_set_selected_hotbar_slot_event(
     set_selected_hotbar_slot: On<SetSelectedHotbarSlotEvent>,
     mut query: Query<&mut Inv>,
 ) {
-    let mut inventory = query.get_mut(set_selected_hotbar_slot.entity).unwrap();
+    // The entity loses its inventory as it disconnects: a late
+    // event for it has nothing to act on.
+    let Ok(mut inventory) = query.get_mut(set_selected_hotbar_slot.entity) else {
+        return;
+    };
     inventory.selected_hotbar_slot = set_selected_hotbar_slot.slot;
 }
 
