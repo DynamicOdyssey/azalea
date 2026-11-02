@@ -100,6 +100,13 @@ impl BlockStatePredictionHandler {
         self.seq
     }
 
+    /// The sequence number of the latest change this client sent, without
+    /// starting a new one. An acknowledgement at or past it covers that
+    /// change.
+    pub fn current_seq(&self) -> u32 {
+        self.seq
+    }
+
     /// Should be called right before the client updates a block with its
     /// prediction.
     ///
