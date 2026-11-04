@@ -1207,6 +1207,14 @@ impl GamePacketHandler<'_> {
                         *slot = p.item_stack.clone();
                         inventory.state_id = p.state_id;
                     }
+                } else {
+                    // for a container we just closed: the server sent this
+                    // before it saw the close
+                    inventory.apply_late_container_slot(
+                        p.container_id,
+                        p.slot.into(),
+                        &p.item_stack,
+                    );
                 }
             }
         });
@@ -1266,6 +1274,7 @@ impl GamePacketHandler<'_> {
         as_system::<Query<&mut Inventory>>(self.ecs, |mut query| {
             if let Ok(mut inventory) = query.get_mut(self.player) {
                 inventory.id = p.container_id;
+                inventory.last_closed_container = None;
                 inventory.container_menu = Some(azalea_inventory::Menu::mount(p.inventory_columns));
                 inventory.container_menu_title = Some(azalea_chat::FormattedText::default());
             }

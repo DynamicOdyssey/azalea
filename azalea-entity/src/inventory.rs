@@ -37,6 +37,15 @@ pub struct Inventory {
     ///
     /// This can only be `Some` when `container_menu` is `Some`.
     pub container_menu_title: Option<FormattedText>,
+    /// The container that was most recently closed, if no other container has
+    /// been opened since.
+    ///
+    /// The server's `ContainerSetContent` and `ContainerSetSlot` packets for
+    /// a container can arrive after we already closed it. They carry the
+    /// server's copy of our own slots, so the client applies their player
+    /// part to [`Self::inventory_menu`] instead of dropping them. This is
+    /// the container's ID and where its player slots sit in its menu.
+    pub last_closed_container: Option<ClosedContainer>,
     /// The item that is currently held by the cursor, or `Slot::Empty` if
     /// nothing is currently being held.
     ///
@@ -63,7 +72,69 @@ pub struct Inventory {
     pub selected_hotbar_slot: u8,
 }
 
+/// A container that the client closed, kept so that late packets for it can
+/// still update the player's inventory. See
+/// [`Inventory::last_closed_container`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClosedContainer {
+    /// The window ID the container had.
+    pub id: i32,
+    /// The slot indexes of the player's 36 inventory slots in that menu.
+    pub player_slots: std::ops::RangeInclusive<usize>,
+}
+
 impl Inventory {
+    /// Apply a late `ContainerSetContent` for a container that was just
+    /// closed. Returns whether the packet was for that container.
+    ///
+    /// Only the player part of `slots` is used. The container's own slots
+    /// are gone with the container.
+    pub fn apply_late_container_content(&mut self, container_id: i32, slots: &[ItemStack]) -> bool {
+        let Some(closed) = self.last_closed_container.clone() else {
+            return false;
+        };
+        if closed.id != container_id || container_id == 0 {
+            return false;
+        }
+        for (offset, index) in closed.player_slots.enumerate() {
+            if let Some(item) = slots.get(index)
+                && let Some(slot) = self.inventory_player_slot_mut(offset)
+            {
+                *slot = item.clone();
+            }
+        }
+        true
+    }
+
+    /// Apply a late `ContainerSetSlot` for a container that was just closed.
+    /// Returns whether the packet was for that container.
+    pub fn apply_late_container_slot(
+        &mut self,
+        container_id: i32,
+        slot: usize,
+        item: &ItemStack,
+    ) -> bool {
+        let Some(closed) = self.last_closed_container.clone() else {
+            return false;
+        };
+        if closed.id != container_id || container_id == 0 {
+            return false;
+        }
+        if closed.player_slots.contains(&slot)
+            && let Some(target) = self.inventory_player_slot_mut(slot - closed.player_slots.start())
+        {
+            *target = item.clone();
+        }
+        true
+    }
+
+    /// The `offset`th of the 36 player slots (27 main, then 9 hotbar), in the
+    /// player's own inventory menu.
+    fn inventory_player_slot_mut(&mut self, offset: usize) -> Option<&mut ItemStack> {
+        let range = self.inventory_menu.player_slots_range();
+        self.inventory_menu.slot_mut(range.start() + offset)
+    }
+
     /// Returns a reference to the currently active menu.
     ///
     /// If a container is open then it'll return [`Self::container_menu`],
@@ -105,8 +176,8 @@ impl Inventory {
             if self.carried.is_empty() {
                 return self.reset_quick_craft();
             }
-            // if we were starting or ending, or now we aren't ending and the status
-            // changed, reset
+            // if we were starting or ending, or now we aren't ending and the
+            // status changed, reset
             if (last_quick_craft_status == QuickCraftStatusKind::Start
                 || last_quick_craft_status == QuickCraftStatusKind::End
                 || self.quick_craft_status != QuickCraftStatusKind::End)
@@ -132,7 +203,8 @@ impl Inventory {
                 {
                     // minecraft also checks slot.may_place(carried) and
                     // menu.can_drag_to(slot)
-                    // but they always return true so they're not relevant for us
+                    // but they always return true so they're not relevant for
+                    // us
                     if can_item_quick_replace(slot_item, &self.carried, true)
                         && (self.quick_craft_kind == QuickCraftKind::Right
                             || carried.count as usize > self.quick_craft_slots.len())
@@ -230,8 +302,8 @@ impl Inventory {
                         }
 
                         carried_count -= new_carried.count - slot_item_count;
-                        // we have to inline self.menu_mut() here to avoid the borrow checker
-                        // complaining
+                        // we have to inline self.menu_mut() here to avoid the
+                        // borrow checker complaining
                         let menu = match &mut self.container_menu {
                             Some(menu) => menu,
                             _ => &mut self.inventory_menu,
@@ -244,8 +316,8 @@ impl Inventory {
                 return self.reset_quick_craft();
             }
         }
-        // the quick craft status should always be in start if we're not in quick craft
-        // mode
+        // the quick craft status should always be in start if we're not in
+        // quick craft mode
         if self.quick_craft_status != QuickCraftStatusKind::Start {
             return self.reset_quick_craft();
         }
@@ -257,8 +329,8 @@ impl Inventory {
             {
                 // vanilla has `player.drop`s but they're only used
                 // server-side
-                // they're included as comments here in case you want to adapt this for a server
-                // implementation
+                // they're included as comments here in case you want to adapt
+                // this for a server implementation
 
                 // player.drop(self.carried, true);
                 self.carried = ItemStack::Empty;
@@ -351,8 +423,9 @@ impl Inventory {
             &ClickOperation::QuickMove(
                 QuickMoveClick::Left { slot } | QuickMoveClick::Right { slot },
             ) => {
-                // in vanilla it also tests if QuickMove has a slot index of -999
-                // but i don't think that's ever possible so it's not covered here
+                // in vanilla it also tests if QuickMove has a slot index of
+                // -999 but i don't think that's ever possible
+                // so it's not covered here
                 let slot = slot as usize;
                 loop {
                     let new_slot_item = self.menu_mut().quick_move_stack(slot);
@@ -402,7 +475,8 @@ impl Inventory {
                     if self.menu().may_place(source_slot_index, target_item) {
                         let source_max_stack = self.menu().max_stack_size(source_slot_index);
                         if target_slot.count() > source_max_stack {
-                            // if there's more than the max stack size in the target slot
+                            // if there's more than the max stack size in the
+                            // target slot
 
                             let target_slot = self.menu_mut().slot_mut(target_slot_index).unwrap();
                             let new_source_slot =
@@ -498,7 +572,8 @@ impl Inventory {
                                 && (round != 0
                                     || checking_item.count != checking_item.kind.max_stack_size())
                             {
-                                // get the checking_slot and checking_item again but mutable
+                                // get the checking_slot and checking_item again
+                                // but mutable
                                 let checking_slot = self.menu_mut().slot_mut(i).unwrap();
 
                                 let taken_item = checking_slot.split(checking_slot.count() as u32);
@@ -581,7 +656,8 @@ impl Inventory {
         if count <= 0 {
             return None;
         }
-        // vanilla calls .remove here but i think it has the same behavior as split?
+        // vanilla calls .remove here but i think it has the same behavior as
+        // split?
         let removed = slot_item.split(count as u32);
 
         if removed.is_present() && slot_item.is_empty() {
@@ -608,9 +684,11 @@ impl Inventory {
             EquipmentSlot::Chest => &player.armor[1],
             EquipmentSlot::Head => &player.armor[0],
             EquipmentSlot::Body => {
-                // TODO: when riding entities is implemented, mount/horse inventories should be
-                // implemented too. note that horse inventories aren't a normal menu (they're
-                // not in MenuKind), maybe they should be a separate field in `Inventory`?
+                // TODO: when riding entities is implemented, mount/horse
+                // inventories should be implemented too. note
+                // that horse inventories aren't a normal menu (they're
+                // not in MenuKind), maybe they should be a separate field in
+                // `Inventory`?
                 return None;
             }
             EquipmentSlot::Saddle => {
@@ -669,6 +747,7 @@ impl Default for Inventory {
             id: 0,
             container_menu: None,
             container_menu_title: None,
+            last_closed_container: None,
             carried: ItemStack::Empty,
             state_id: 0,
             quick_craft_status: QuickCraftStatusKind::Start,
@@ -700,6 +779,7 @@ mod tests {
                 player: SlotList::default(),
             }),
             container_menu_title: None,
+            last_closed_container: None,
             carried: ItemStack::Empty,
             state_id: 0,
             quick_craft_status: QuickCraftStatusKind::Start,
@@ -719,5 +799,61 @@ mod tests {
             &new_slots[*Menu::CRAFTING_PLAYER_SLOTS.start()],
             &spruce_planks
         );
+    }
+
+    fn closed_chest_inventory() -> Inventory {
+        Inventory {
+            last_closed_container: Some(ClosedContainer {
+                id: 7,
+                player_slots: Menu::from_kind(azalea_registry::builtin::MenuKind::Generic9x3)
+                    .player_slots_range(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn late_container_content_updates_player_slots() {
+        let mut inv = closed_chest_inventory();
+        // a 9x3 chest: 27 container slots, then the 36 player slots
+        let mut slots = vec![ItemStack::Empty; 63];
+        slots[0] = ItemStack::new(ItemKind::Stone, 1); // chest slot, ignored
+        slots[27] = ItemStack::new(ItemKind::OakLog, 16); // first main slot
+        slots[62] = ItemStack::new(ItemKind::Dirt, 3); // last hotbar slot
+        assert!(inv.apply_late_container_content(7, &slots));
+        let player = inv.inventory_menu.player_slots_range();
+        assert_eq!(
+            inv.inventory_menu.slot(*player.start()),
+            Some(&ItemStack::new(ItemKind::OakLog, 16))
+        );
+        assert_eq!(
+            inv.inventory_menu.slot(*player.end()),
+            Some(&ItemStack::new(ItemKind::Dirt, 3))
+        );
+        // the container's own slot did not leak into the crafting grid
+        assert_eq!(inv.inventory_menu.slot(0), Some(&ItemStack::Empty));
+    }
+
+    #[test]
+    fn late_container_content_for_another_id_is_ignored() {
+        let mut inv = closed_chest_inventory();
+        let slots = vec![ItemStack::new(ItemKind::OakLog, 1); 63];
+        assert!(!inv.apply_late_container_content(9, &slots));
+        assert!(!inv.apply_late_container_content(0, &slots));
+        inv.last_closed_container = None;
+        assert!(!inv.apply_late_container_content(7, &slots));
+    }
+
+    #[test]
+    fn late_container_slot_maps_into_player_menu() {
+        let mut inv = closed_chest_inventory();
+        let item = ItemStack::new(ItemKind::OakLog, 16);
+        // slot 27 of a chest menu is the first player slot
+        assert!(inv.apply_late_container_slot(7, 27, &item));
+        let player = inv.inventory_menu.player_slots_range();
+        assert_eq!(inv.inventory_menu.slot(*player.start()), Some(&item));
+        // a chest slot is consumed but changes nothing
+        assert!(inv.apply_late_container_slot(7, 3, &ItemStack::new(ItemKind::Dirt, 1)));
+        assert!(!inv.apply_late_container_slot(8, 27, &item));
     }
 }

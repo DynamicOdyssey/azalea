@@ -15,7 +15,7 @@ use azalea_world::{WorldName, Worlds};
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
 use indexmap::IndexMap;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     inventory::equipment_effects::{collect_equipment_changes, handle_equipment_changes},
@@ -75,6 +75,7 @@ fn handle_menu_opened_trigger(event: On<MenuOpenedEvent>, mut query: Query<&mut 
         return;
     };
     inventory.id = event.window_id;
+    inventory.last_closed_container = None;
     inventory.container_menu = Some(Menu::from_kind(event.menu_type));
     inventory.container_menu_title = Some(event.title.clone());
 }
@@ -162,6 +163,15 @@ pub fn handle_client_side_close_container_trigger(
         // container_menu when the server tries to modify id 0 for slots
         // within `inventory`. not implemented for now because i'm not
         // sure if that's worth worrying about.
+
+        // remember the menu so a ContainerSetContent that the server sent
+        // before it saw our close can still update our slots
+        if inventory.id != 0 {
+            inventory.last_closed_container = Some(azalea_entity::inventory::ClosedContainer {
+                id: inventory.id,
+                player_slots: inventory_menu.player_slots_range(),
+            });
+        }
 
         let new_inventory = inventory_menu.slots()[inventory_menu.player_slots_range()].to_vec();
         let new_inventory = <[ItemStack; 36]>::try_from(new_inventory).unwrap();
@@ -263,6 +273,18 @@ pub fn handle_set_container_content_trigger(
     };
 
     if set_container_content.container_id != inventory.id {
+        // The server may have sent this before it saw us close the
+        // container. Its copy of our own slots is still the truth.
+        if inventory.apply_late_container_content(
+            set_container_content.container_id,
+            &set_container_content.slots,
+        ) {
+            debug!(
+                "Applied late SetContainerContentEvent for closed container {}",
+                set_container_content.container_id
+            );
+            return;
+        }
         warn!(
             "Got SetContainerContentEvent for container with ID {}, but the current container ID is {}",
             set_container_content.container_id, inventory.id
@@ -332,5 +354,61 @@ pub fn ensure_has_sent_carried_item(
         commands.entity(entity).insert(LastSentSelectedHotbarSlot {
             slot: inventory.selected_hotbar_slot,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use azalea_registry::builtin::ItemKind;
+
+    use super::*;
+
+    /// The server's SetContainerContent for a chest arrives after we closed
+    /// the chest: its player slots must still reach our inventory.
+    #[test]
+    fn late_set_container_content_after_close_reaches_inventory() {
+        let mut world = World::new();
+        world.add_observer(handle_menu_opened_trigger);
+        world.add_observer(handle_client_side_close_container_trigger);
+        world.add_observer(handle_set_container_content_trigger);
+        let entity = world.spawn(Inv::default()).id();
+
+        world.trigger(MenuOpenedEvent {
+            entity,
+            window_id: 7,
+            menu_type: MenuKind::Generic9x3,
+            title: FormattedText::default(),
+        });
+        world.trigger(ClientsideCloseContainerEvent { entity });
+
+        let mut slots = vec![ItemStack::Empty; 63];
+        slots[27] = ItemStack::new(ItemKind::OakLog, 16);
+        world.trigger(SetContainerContentEvent {
+            entity,
+            slots,
+            container_id: 7,
+        });
+
+        let inv = world.get::<Inv>(entity).unwrap();
+        let first = *inv.inventory_menu.player_slots_range().start();
+        assert_eq!(
+            inv.inventory_menu.slot(first),
+            Some(&ItemStack::new(ItemKind::OakLog, 16))
+        );
+
+        // opening another container forgets the closed one
+        world.trigger(MenuOpenedEvent {
+            entity,
+            window_id: 8,
+            menu_type: MenuKind::Generic9x3,
+            title: FormattedText::default(),
+        });
+        assert!(
+            world
+                .get::<Inv>(entity)
+                .unwrap()
+                .last_closed_container
+                .is_none()
+        );
     }
 }
