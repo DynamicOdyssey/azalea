@@ -11,7 +11,7 @@ use azalea_registry::builtin::BlockKind;
 use azalea_world::{Chunk, ChunkStorage, PartialChunkStorage};
 
 use super::{
-    GotoEvent,
+    GotoEvent, Pathfinder, StopPathfindingEvent,
     astar::PathfinderTimeout,
     goals::BlockPosGoal,
     moves,
@@ -315,4 +315,87 @@ fn test_mine_through_non_colliding_block() {
     });
 
     assert_simulation_reaches(&mut simulation, 200, BlockPos::new(0, 70, 0));
+}
+
+fn floor_line(len: i32) -> Vec<BlockPos> {
+    (0..len).map(|z| BlockPos::new(0, 70, z)).collect()
+}
+
+fn goto_event(simulation: &Simulation, end_pos: BlockPos) -> GotoEvent {
+    GotoEvent {
+        entity: simulation.entity,
+        goal: Arc::new(BlockPosGoal(end_pos)),
+        opts: PathfinderOpts::new()
+            .allow_mining(false)
+            .min_timeout(PathfinderTimeout::Nodes(1_000_000))
+            .max_timeout(PathfinderTimeout::Nodes(5_000_000)),
+    }
+}
+
+/// A stop followed straight away by a goto (ending one walk and starting the
+/// next) can land in the same update. The goto must win: the stop used to be
+/// handled after it, which threw away the new calculation and left the bot
+/// with a goal, `is_calculating` set and no path.
+#[test]
+fn test_goto_right_after_stop_is_kept() {
+    for force in [false, true] {
+        let mut partial_chunks = PartialChunkStorage::default();
+        let mut simulation = setup_simulation_world(
+            &mut partial_chunks,
+            BlockPos::new(0, 71, 0),
+            &floor_line(6),
+            &[],
+        );
+        let end_pos = BlockPos::new(0, 71, 5);
+        simulation
+            .app
+            .world_mut()
+            .write_message(StopPathfindingEvent {
+                entity: simulation.entity,
+                force,
+            });
+        let goto = goto_event(&simulation, end_pos);
+        simulation.app.world_mut().write_message(goto);
+        assert_simulation_reaches(&mut simulation, 60, end_pos);
+        let pathfinder = simulation
+            .app
+            .world()
+            .get::<Pathfinder>(simulation.entity)
+            .unwrap();
+        assert!(
+            pathfinder.goal.is_none() && !pathfinder.is_calculating,
+            "force: {force}"
+        );
+    }
+}
+
+/// A stop while a path is still being calculated (no path being followed yet)
+/// clears the goal and `is_calculating`, so the bot doesn't look busy forever.
+#[test]
+fn test_stop_while_calculating_clears_state() {
+    let mut partial_chunks = PartialChunkStorage::default();
+    let mut simulation = setup_simulation_world(
+        &mut partial_chunks,
+        BlockPos::new(0, 71, 0),
+        &floor_line(6),
+        &[],
+    );
+    let goto = goto_event(&simulation, BlockPos::new(0, 71, 5));
+    simulation.app.world_mut().write_message(goto);
+    simulation.app.update();
+    simulation
+        .app
+        .world_mut()
+        .write_message(StopPathfindingEvent {
+            entity: simulation.entity,
+            force: true,
+        });
+    simulation.app.update();
+    let pathfinder = simulation
+        .app
+        .world()
+        .get::<Pathfinder>(simulation.entity)
+        .unwrap();
+    assert!(pathfinder.goal.is_none());
+    assert!(!pathfinder.is_calculating);
 }

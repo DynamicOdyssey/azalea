@@ -91,11 +91,13 @@ impl Plugin for PathfinderPlugin {
             .add_systems(
                 Update,
                 (
+                    // stops first: a stop sent just before a goto (ending one walk and
+                    // starting the next) must not cancel the goto that follows it
+                    handle_stop_pathfinding_event,
                     goto_listener,
                     handle_tasks,
                     stop_pathfinding_on_world_change,
                     path_found_listener,
-                    handle_stop_pathfinding_event,
                 )
                     .chain()
                     .before(MoveEventsSystems)
@@ -773,7 +775,7 @@ pub struct StopPathfindingEvent {
 
 pub fn handle_stop_pathfinding_event(
     mut events: MessageReader<StopPathfindingEvent>,
-    mut query: Query<(&mut Pathfinder, &mut ExecutingPath)>,
+    mut query: Query<(&mut Pathfinder, Option<&mut ExecutingPath>)>,
     mut walk_events: MessageWriter<StartWalkEvent>,
     mut commands: Commands,
 ) {
@@ -781,10 +783,16 @@ pub fn handle_stop_pathfinding_event(
         // stop computing any path that's being computed
         commands.entity(event.entity).remove::<ComputePath>();
 
-        let Ok((mut pathfinder, mut executing_path)) = query.get_mut(event.entity) else {
+        let Ok((mut pathfinder, executing_path)) = query.get_mut(event.entity) else {
             continue;
         };
+        // the calculation was dropped, so nothing will clear these later (when
+        // no path was being followed yet they used to stay set for good)
         pathfinder.goal = None;
+        pathfinder.is_calculating = false;
+        let Some(mut executing_path) = executing_path else {
+            continue;
+        };
         if event.force {
             executing_path.path.clear();
             executing_path.queued_path = None;
